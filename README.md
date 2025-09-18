@@ -37,14 +37,13 @@ Data flow (high-level):
 5. **Deployment (Raspberry Pi)**
    - Install `tflite-runtime` on Pi and run provided `run_inference.py` to detect objects in an image.
 
-### Screenshots & Results (Placeholders)
-- Insert a training results plot (loss/metrics) here.
-  - Placeholder: `docs/images/training_curves.png`
-- Insert an inference visualization on a validation image.
-  - Placeholder: `docs/images/val_prediction.jpg`
-- Insert an inference visualization from Raspberry Pi run.
-  - Placeholder: `docs/images/pi_prediction.jpg`
-- Suggested metrics to show: mAP50, mAP50-95, precision, recall, inference time on Pi.
+### Screenshots & Results
+
+![Training/Evaluation Screenshot](docs/images/Screenshot%202025-09-18%20182759.png)
+
+![Inference Screenshot](docs/images/Screenshot%202025-09-18%20182829.png)
+
+Suggested metrics to add alongside screenshots: mAP50, mAP50-95, precision, recall, inference time on Raspberry Pi.
 
 ### Challenges & Solutions
 - **TFLite output parsing differences**: TFLite export formats can vary. Validate output tensor shapes and adjust post-processing (transpose, indices) accordingly.
