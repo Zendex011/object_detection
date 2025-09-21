@@ -25,13 +25,13 @@ A real-time object detection system using YOLO TFLite models that can detect obj
 
 1. **Clone the repository**:
    ```bash
-   git clone <your-repo-url>
-   cd od
+   git clone https://github.com/Zendex011/object_detection.git
+   cd object_detection
    ```
 
 2. **Install dependencies**:
    ```bash
-   pip install opencv-python tensorflow numpy
+   pip install -r requirements.txt
    ```
 
 3. **Add your model file**:
@@ -62,7 +62,7 @@ python run_pytorch_inference.py
 ## 📁 Project Structure
 
 ```
-od/
+object_detection/
 ├── README.md                           # This file
 ├── run_pytorch_inference.py           # Main detection script
 ├── run_inference.py                   # Alternative inference script
@@ -70,6 +70,8 @@ od/
 ├── best_float32.tflite               # YOLO TFLite model (add your own)
 ├── best.pt                           # PyTorch model (if available)
 ├── output_detections.jpg             # Sample output image
+├── requirements.txt                   # Python dependencies
+├── .gitignore                        # Git ignore file
 └── docs/                             # Documentation and images
     └── images/                       # Screenshots and examples
 ```
