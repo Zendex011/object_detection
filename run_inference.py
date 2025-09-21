@@ -1,6 +1,7 @@
 import argparse
 import os
-from typing import List, Tuple
+import time
+from typing import List, Tuple, Optional
 
 import numpy as np
 
@@ -14,6 +15,20 @@ def _lazy_import_interpreter():
 	return Interpreter
 
 
+def _lazy_import_ultralytics():
+	"""Return YOLO from ultralytics."""
+	try:
+		from ultralytics import YOLO
+		return YOLO
+	except ImportError:
+		raise ImportError("ultralytics not installed. Install with: pip install ultralytics")
+
+
+def _cv2():
+	import cv2  # lazy import to speed module import
+	return cv2
+
+
 def _letterbox_resize(image: np.ndarray, target_size: Tuple[int, int]) -> Tuple[np.ndarray, float, Tuple[int, int]]:
 	"""
 	Resize image with unchanged aspect ratio using padding (letterbox) to target_size (w, h).
@@ -22,18 +37,14 @@ def _letterbox_resize(image: np.ndarray, target_size: Tuple[int, int]) -> Tuple[
 	h, w = image.shape[:2]
 	tw, th = target_size
 	scale = min(tw / w, th / h)
-\n+	new_w, new_h = int(round(w * scale)), int(round(h * scale))
+
+	new_w, new_h = int(round(w * scale)), int(round(h * scale))
 	resized = _cv2().resize(image, (new_w, new_h), interpolation=_cv2().INTER_LINEAR)
 	canvas = np.full((th, tw, 3), 114, dtype=np.uint8)
 	pad_w = (tw - new_w) // 2
 	pad_h = (th - new_h) // 2
 	canvas[pad_h:pad_h + new_h, pad_w:pad_w + new_w] = resized
 	return canvas, scale, (pad_w, pad_h)
-
-
-def _cv2():
-	import cv2  # lazy import to speed module import
-	return cv2
 
 
 def _xywh_to_xyxy(xywh: np.ndarray) -> np.ndarray:
@@ -73,46 +84,32 @@ def _nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float) -> List[in
 
 
 def run_yolo_tflite(
-	image_path: str,
-	model_path: str = "best_float32.tflite",
+	image: np.ndarray,
+	interpreter,
+	input_details,
+	output_details,
 	conf_threshold: float = 0.25,
 	iou_threshold: float = 0.45,
-	output_path: str = "output_detections.jpg",
 ) -> List[Tuple[int, float, Tuple[int, int, int, int]]]:
 	"""
-	Run YOLOv8 TFLite model on an image.
+	Run YOLOv8 TFLite model on an image array.
 
 	Args:
-		image_path: Path to input image.
-		model_path: Path to TFLite model (default: best_float32.tflite in CWD).
+		image: Input image as numpy array (BGR format).
+		interpreter: Loaded TFLite interpreter.
+		input_details: Input tensor details.
+		output_details: Output tensor details.
 		conf_threshold: Confidence threshold.
 		iou_threshold: IoU threshold for NMS.
-		output_path: Where to save visualization image.
 
 	Returns:
 		List of detections as tuples: (class_id, score, (x1, y1, x2, y2)) in original image coordinates.
 	"""
-	if not os.path.isfile(image_path):
-		raise FileNotFoundError(f"Image not found: {image_path}")
-	if not os.path.isfile(model_path):
-		raise FileNotFoundError(f"Model not found: {model_path}")
-
-	cv2 = _cv2()
-	image_bgr = cv2.imread(image_path)
-	if image_bgr is None:
-		raise ValueError(f"Failed to read image: {image_path}")
-	orig_h, orig_w = image_bgr.shape[:2]
-
-	Interpreter = _lazy_import_interpreter()
-	interpreter = Interpreter(model_path=model_path)
-	interpreter.allocate_tensors()
-
-	input_details = interpreter.get_input_details()
-	output_details = interpreter.get_output_details()
+	orig_h, orig_w = image.shape[:2]
 
 	# Assume a single input: (1, H, W, 3)
 	ih, iw = input_details[0]["shape"][1], input_details[0]["shape"][2]
-	resized, scale, (pad_w, pad_h) = _letterbox_resize(image_bgr, (iw, ih))
+	resized, scale, (pad_w, pad_h) = _letterbox_resize(image, (iw, ih))
 	img_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
 	img_input = np.expand_dims(img_rgb, axis=0)
 
@@ -205,16 +202,6 @@ def run_yolo_tflite(
 	boxes_xyxy[:, 0::2] = boxes_xyxy[:, 0::2].clip(0, orig_w - 1)
 	boxes_xyxy[:, 1::2] = boxes_xyxy[:, 1::2].clip(0, orig_h - 1)
 
-	# Draw and save
-	vis = image_bgr.copy()
-	for cls_id, sc, box in zip(classes.tolist(), scores.tolist(), boxes_xyxy.astype(int).tolist()):
-		x1, y1, x2, y2 = box
-		cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-		label = f"{cls_id}:{sc:.2f}"
-		cv2.putText(vis, label, (x1, max(0, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-	cv2.imwrite(output_path, vis)
-
 	# Return detections
 	results: List[Tuple[int, float, Tuple[int, int, int, int]]] = []
 	for cls_id, sc, box in zip(classes.tolist(), scores.tolist(), boxes_xyxy.astype(int).tolist()):
@@ -222,28 +209,217 @@ def run_yolo_tflite(
 	return results
 
 
+def run_yolo_pytorch(
+	image: np.ndarray,
+	model,
+	conf_threshold: float = 0.25,
+	iou_threshold: float = 0.45,
+) -> List[Tuple[int, float, Tuple[int, int, int, int]]]:
+	"""
+	Run YOLOv8 PyTorch model on an image array.
+
+	Args:
+		image: Input image as numpy array (BGR format).
+		model: Loaded YOLO model.
+		conf_threshold: Confidence threshold.
+		iou_threshold: IoU threshold for NMS.
+
+	Returns:
+		List of detections as tuples: (class_id, score, (x1, y1, x2, y2)) in original image coordinates.
+	"""
+	results = model(image, conf=conf_threshold, iou=iou_threshold)
+	result = results[0]
+	
+	detections = []
+	if result.boxes is not None:
+		boxes = result.boxes.xyxy.cpu().numpy()  # x1, y1, x2, y2
+		confidences = result.boxes.conf.cpu().numpy()
+		class_ids = result.boxes.cls.cpu().numpy().astype(int)
+		
+		for box, conf, cls_id in zip(boxes, confidences, class_ids):
+			x1, y1, x2, y2 = box.astype(int)
+			detections.append((int(cls_id), float(conf), (int(x1), int(y1), int(x2), int(y2))))
+	
+	return detections
+
+
+def draw_detections(image: np.ndarray, detections: List[Tuple[int, float, Tuple[int, int, int, int]]], 
+                   class_names: Optional[List[str]] = None) -> np.ndarray:
+	"""Draw bounding boxes and labels on the image."""
+	cv2 = _cv2()
+	vis = image.copy()
+	
+	# Default class names if not provided
+	if class_names is None:
+		class_names = [
+			'bed', 'sofa', 'chair', 'table', 'lamp', 'tv', 'laptop', 'wardrobe',
+			'window', 'door', 'potted plant', 'photo frame'
+		]
+	
+	for cls_id, score, (x1, y1, x2, y2) in detections:
+		# Draw bounding box
+		cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+		
+		# Prepare label
+		class_name = class_names[cls_id] if cls_id < len(class_names) else f"Class {cls_id}"
+		label = f"{class_name}: {score:.2f}"
+		
+		# Draw label background
+		label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+		cv2.rectangle(vis, (x1, y1 - label_size[1] - 10), (x1 + label_size[0], y1), (0, 255, 0), -1)
+		
+		# Draw label text
+		cv2.putText(vis, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+	
+	return vis
+
+
+def run_camera_inference(
+	model_path: str = "best.pt",
+	model_type: str = "pytorch",  # "pytorch" or "tflite"
+	camera_id: int = 0,
+	conf_threshold: float = 0.25,
+	iou_threshold: float = 0.45,
+	display_fps: bool = True,
+	class_names: Optional[List[str]] = None,
+):
+	"""
+	Run real-time object detection on camera feed.
+
+	Args:
+		model_path: Path to model file (.pt for PyTorch, .tflite for TFLite).
+		model_type: Type of model ("pytorch" or "tflite").
+		camera_id: Camera device ID (usually 0 for default camera).
+		conf_threshold: Confidence threshold for detections.
+		iou_threshold: IoU threshold for NMS.
+		display_fps: Whether to display FPS counter.
+		class_names: List of class names for display.
+	"""
+	cv2 = _cv2()
+	
+	# Load model
+	print(f"Loading {model_type} model from: {model_path}")
+	
+	if model_type.lower() == "pytorch":
+		YOLO = _lazy_import_ultralytics()
+		model = YOLO(model_path)
+		interpreter = None
+		input_details = None
+		output_details = None
+	elif model_type.lower() == "tflite":
+		Interpreter = _lazy_import_interpreter()
+		interpreter = Interpreter(model_path=model_path)
+		interpreter.allocate_tensors()
+		input_details = interpreter.get_input_details()
+		output_details = interpreter.get_output_details()
+		model = None
+	else:
+		raise ValueError("model_type must be 'pytorch' or 'tflite'")
+	
+	print("✅ Model loaded successfully!")
+	
+	# Initialize camera
+	print(f"Initializing camera {camera_id}...")
+	cap = cv2.VideoCapture(camera_id)
+	
+	if not cap.isOpened():
+		raise RuntimeError(f"Could not open camera {camera_id}")
+	
+	# Set camera properties for better performance
+	cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+	cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+	cap.set(cv2.CAP_PROP_FPS, 30)
+	
+	print("✅ Camera initialized successfully!")
+	print("\nPress 'q' to quit, 's' to save current frame")
+	
+	# FPS calculation
+	fps_counter = 0
+	fps_start_time = time.time()
+	fps = 0
+	
+	try:
+		while True:
+			ret, frame = cap.read()
+			if not ret:
+				print("❌ Failed to read from camera")
+				break
+			
+			# Run inference
+			if model_type.lower() == "pytorch":
+				detections = run_yolo_pytorch(frame, model, conf_threshold, iou_threshold)
+			else:  # tflite
+				detections = run_yolo_tflite(frame, interpreter, input_details, output_details, 
+				                           conf_threshold, iou_threshold)
+			
+			# Draw detections
+			annotated_frame = draw_detections(frame, detections, class_names)
+			
+			# Calculate and display FPS
+			if display_fps:
+				fps_counter += 1
+				if fps_counter % 30 == 0:  # Update FPS every 30 frames
+					fps_end_time = time.time()
+					fps = 30 / (fps_end_time - fps_start_time)
+					fps_start_time = fps_end_time
+				
+				cv2.putText(annotated_frame, f"FPS: {fps:.1f}", (10, 30), 
+				           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+			
+			# Display detection count
+			cv2.putText(annotated_frame, f"Objects: {len(detections)}", (10, 70), 
+			           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+			
+			# Show frame
+			cv2.imshow("YOLOv8 Real-time Object Detection", annotated_frame)
+			
+			# Handle key presses
+			key = cv2.waitKey(1) & 0xFF
+			if key == ord('q'):
+				break
+			elif key == ord('s'):
+				# Save current frame
+				timestamp = int(time.time())
+				filename = f"camera_detection_{timestamp}.jpg"
+				cv2.imwrite(filename, annotated_frame)
+				print(f"💾 Saved frame as: {filename}")
+	
+	except KeyboardInterrupt:
+		print("\n⏹️  Stopped by user")
+	
+	finally:
+		# Cleanup
+		cap.release()
+		cv2.destroyAllWindows()
+		print("✅ Camera released and windows closed")
+
+
 def main():
-	parser = argparse.ArgumentParser(description="Run YOLOv8 TFLite inference on an image.")
-	parser.add_argument("image", help="Path to input image")
-	parser.add_argument("--model", default="best_float32.tflite", help="Path to TFLite model")
+	parser = argparse.ArgumentParser(description="Run YOLOv8 real-time object detection on camera feed.")
+	parser.add_argument("--model", default="best.pt", help="Path to model file (.pt or .tflite)")
+	parser.add_argument("--type", choices=["pytorch", "tflite"], default="pytorch", 
+	                   help="Model type: pytorch or tflite")
+	parser.add_argument("--camera", type=int, default=0, help="Camera device ID")
 	parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
 	parser.add_argument("--iou", type=float, default=0.45, help="IoU threshold for NMS")
-	parser.add_argument("--out", default="output_detections.jpg", help="Output image path")
+	parser.add_argument("--no-fps", action="store_true", help="Disable FPS display")
 	args = parser.parse_args()
-
-	results = run_yolo_tflite(
-		image_path=args.image,
+	
+	# Check if model file exists
+	if not os.path.isfile(args.model):
+		print(f"❌ Model file not found: {args.model}")
+		return
+	
+	# Run camera inference
+	run_camera_inference(
 		model_path=args.model,
+		model_type=args.type,
+		camera_id=args.camera,
 		conf_threshold=args.conf,
 		iou_threshold=args.iou,
-		output_path=args.out,
+		display_fps=not args.no_fps,
 	)
-	print(f"Detections ({len(results)}):")
-	for cls_id, score, (x1, y1, x2, y2) in results:
-		print(f"class={cls_id}, score={score:.3f}, box=({x1},{y1},{x2},{y2})")
 
 
 if __name__ == "__main__":
 	main()
-
-
