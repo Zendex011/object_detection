@@ -1,0 +1,32 @@
+import os
+import subprocess
+
+# -----------------------
+# Configuration
+# -----------------------
+REPO_PATH = r"C:\Users\ASUS\OneDrive\Desktop\od"  # Path to your project
+COMMIT_MSG = "Update YOLOv8 TFLite detection code"  # Commit message
+
+# -----------------------
+# Navigate to repo
+# -----------------------
+os.chdir(REPO_PATH)
+
+# -----------------------
+# Git commands
+# -----------------------
+commands = [
+    ["git", "add", "."],
+    ["git", "commit", "-m", COMMIT_MSG],
+    ["git", "push", "origin", "main"]  # Replace 'main' with your branch if different
+]
+
+for cmd in commands:
+    try:
+        print(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        print(result.stdout)
+        if result.stderr:
+            print("ERROR:", result.stderr)
+    except Exception as e:
+        print("Exception:", e)
