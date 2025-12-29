@@ -90,7 +90,7 @@ OD/                       # Root project folder
 
 The script is configured for a YOLO model with:
 - **Input size**: 640x640 pixels
-- **Classes**: 12 object classes (bed, table, pillow, glass, chair, sofa, book, lamp, tv, cup, bottle, unknown)
+- **Classes**: 84 object classes (bed, table, pillow, glass, chair, sofa, book, lamp, tv, cup, bottle, unknown,.........)
 - **Output format**: Single tensor with shape (1, 16, 8400)
 
 ### Customizing Classes
